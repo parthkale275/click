@@ -391,6 +391,32 @@ def test_full_complete(runner, shell, env, expect):
     assert result.output == expect
 
 
+@pytest.mark.parametrize(
+    ("words", "cword", "expect"),
+    [
+        (r"mycli sub C:\Users\ann\doc", "2", (["sub"], r"C:\Users\ann\doc")),
+        (r"mycli sub C:\Temp\\", "2", (["sub"], r"C:\Temp\\")),
+        ("mycli sub 'a b'", "2", (["sub"], "a b")),
+        ("mycli sub 'a''b'", "2", (["sub"], "a'b")),
+        ("mycli sub a` b", "2", (["sub"], "a b")),
+        ('mycli sub "a`"b"', "2", (["sub"], 'a"b')),
+    ],
+)
+def test_powershell_get_completion_args(monkeypatch, words, cword, expect):
+    monkeypatch.setenv("COMP_WORDS", words)
+    monkeypatch.setenv("COMP_CWORD", cword)
+    pc = PowerShellComplete(Command("x"), {}, "mycli", "_X")
+    assert pc.get_completion_args() == expect
+
+
+def test_powershell_source_quotes_program_name():
+    pc = PowerShellComplete(Command("x"), {}, "C:\\Program Files\\my 'cli.exe", "_X")
+    source = pc.source()
+    quoted_name = "'C:\\Program Files\\my ''cli.exe'"
+    assert f"-CommandName {quoted_name}" in source
+    assert f"& {quoted_name} 2>$null" in source
+
+
 def test_source_uses_lf_line_endings(monkeypatch):
     stdout = io.BytesIO()
     stream = io.TextIOWrapper(stdout, encoding="utf-8", newline="\r\n")

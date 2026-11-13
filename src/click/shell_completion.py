@@ -208,8 +208,7 @@ complete --no-files --command %(prog_name)s --arguments \
 # Compatible with Windows PowerShell 5.1+ and PowerShell (pwsh) 7+.
 # Uses Register-ArgumentCompleter -Native, which receives the command AST
 # as parsed by PowerShell. The command text is forwarded verbatim through
-# COMP_WORDS so the Python side can reuse the same shlex-based splitting
-# used by the bash/zsh completers.
+# COMP_WORDS and split according to PowerShell's quoting and escaping rules.
 _SOURCE_POWERSHELL = """\
 Register-ArgumentCompleter -Native -CommandName %(prog_name)s -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
@@ -522,8 +521,14 @@ class PowerShellComplete(ShellComplete):
     name: t.ClassVar[str] = "powershell"
     source_template: t.ClassVar[str] = _SOURCE_POWERSHELL
 
+    def source_vars(self) -> _SourceVarsDict:
+        source_vars = super().source_vars()
+        quoted_prog_name = "'" + self.prog_name.replace("'", "''") + "'"
+        source_vars["prog_name"] = quoted_prog_name
+        return source_vars
+
     def get_completion_args(self) -> tuple[list[str], str]:
-        cwords = split_arg_string(os.environ["COMP_WORDS"])
+        cwords = _split_powershell_arg_string(os.environ["COMP_WORDS"])
         cword = int(os.environ["COMP_CWORD"])
         args = cwords[1:cword]
 
@@ -629,6 +634,64 @@ def split_arg_string(string: str) -> list[str]:
         out.append(lex.token)
 
     return out
+
+
+def _split_powershell_arg_string(string: str) -> list[str]:
+    """Split command text using PowerShell's quoting and escaping rules."""
+    words: list[str] = []
+    word: list[str] = []
+    quote: str | None = None
+    in_word = False
+    i = 0
+
+    while i < len(string):
+        char = string[i]
+
+        if quote == "'":
+            if char == "'" and i + 1 < len(string) and string[i + 1] == "'":
+                word.append("'")
+                i += 2
+                continue
+            if char == "'":
+                quote = None
+            else:
+                word.append(char)
+        elif quote == '"':
+            if char == "`":
+                if i + 1 < len(string):
+                    word.append(string[i + 1])
+                    i += 2
+                    continue
+                word.append(char)
+            elif char == '"':
+                quote = None
+            else:
+                word.append(char)
+        elif char.isspace():
+            if in_word:
+                words.append("".join(word))
+                word.clear()
+                in_word = False
+        elif char in {"'", '"'}:
+            quote = char
+            in_word = True
+        elif char == "`":
+            in_word = True
+            if i + 1 < len(string):
+                word.append(string[i + 1])
+                i += 2
+                continue
+            word.append(char)
+        else:
+            word.append(char)
+            in_word = True
+
+        i += 1
+
+    if in_word:
+        words.append("".join(word))
+
+    return words
 
 
 def _is_incomplete_argument(ctx: Context, param: Parameter) -> bool:
